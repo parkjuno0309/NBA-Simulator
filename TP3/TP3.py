@@ -1,9 +1,15 @@
 from cmu_112_graphics import *
 import math, time, requests, json, requests_cache, string, random, decimal
 from PIL import ImageTk, Image
+from io import BytesIO
 
+
+requests_cache.install_cache('nba_cache')
 #code from https://pypi.org/project/requests-cache/
 session = requests_cache.CachedSession('demo_cache')
+
+API_KEY = "2d19586287f84fbcadd1e39a045a6349"
+import json
 
 #function that creates list of all team names
 def getTeams():
@@ -18,10 +24,25 @@ def getTeams():
 #function that creates list of team acronyms
 def getTeamAcronyms():
     teamAcronyms = []
-    response = session.get('https://nba-players.herokuapp.com/teams')
-    responseString = response.text
-    responseList = json.loads(responseString)
-    return sorted(responseList)
+    response = session.get('https://www.balldontlie.io/api/v1/teams')
+    responseJSON = response.json()
+    for team in responseJSON['data']:
+        teamAcronyms.append(team['abbreviation'])
+    sortedAcronyms = sorted(teamAcronyms)
+    sortedAcronyms[1], sortedAcronyms[2] = sortedAcronyms[2], sortedAcronyms[1]
+    return sortedAcronyms
+
+
+def filterName(nameString):
+    # Split the name string into first and last name
+    splitName = nameString.split()
+    if len(splitName) == 2:
+        firstName, lastName = splitName
+    else:
+        # Handle cases where the player has a middle name or initial
+        firstName = splitName[0]
+        lastName = ' '.join(splitName[1:])
+    return firstName, lastName
 
 ###MODEL
 def appStarted(app):
@@ -62,17 +83,17 @@ def resetApp(app):
     app.posessionSwitchTime = 0
     app.teams = getTeams()
     app.teamAcronyms = getTeamAcronyms()
-    app.teamRoster = getTeamPlayers('atl')
+    app.teamRoster = getTeamPlayers('ATL')
 
     #team mode app selects
     app.selected = (0,0)
     app.selectedTeam = 'Atlanta Hawks'
-    app.selectedTeamAcronym = 'atl'
+    app.selectedTeamAcronym = 'ATL'
     app.selectedPlayer = 0
     app.selectedPlayerName = app.teamRoster[app.selectedPlayer]
     app.playerToSub = -1
-    app.playing5 = getBestFive(app, app.teamRoster)[0]
-    app.playing5Overalls = getBestFive(app, app.teamRoster)[1]
+    app.playing5 = getBestFive(app, app.teamRoster, 'ATL')[0]
+    app.playing5Overalls = getBestFive(app, app.teamRoster, 'ATL')[1]
     app.playerCoordinates = [[app.width*(0.47), app.height//2],[app.width*(0.38), app.height//2], [app.width*(0.28), app.height//2],
         [app.width*(0.45), app.height*(0.33)], [app.width*(0.45), app.height*(0.67)]]
     app.playerStaminas = []
@@ -116,54 +137,57 @@ def resetApp(app):
 
 #returns list of players on a specific team
 def getTeamPlayers(team):
-    players = []
-    ratings = []
-    response = session.get("https://nba-players.herokuapp.com/players-stats-teams/" + str(team))
-    responseString = response.text
-    responseDict = json.loads(responseString)
-    for i in range(len(responseDict)):
-        name = responseDict[i]['name']
-        nameString = str(name)
-        overallRating = getPlayerRatings(nameString)[1]
-        if len(players) > 11:
-            for i in range(len(ratings)):
-                if overallRating > ratings[i]:
-                    players.insert(i, nameString)
-                    players.pop(i+1)
-                    ratings.insert(i, overallRating)
-                    ratings.pop(i+1)
-                    break
-        else:
-            ratings.append(overallRating)
-            players.append(nameString)
-    return players
+    headers = {
+        "Ocp-Apim-Subscription-Key": API_KEY
+    }
+    response = session.get(f"https://api.sportsdata.io/v3/nba/scores/json/Players?key={API_KEY}", headers=headers)
+    responseJSON = response.json()
+    players = [player['FirstName'] + ' ' + player['LastName'] for player in responseJSON if player['Team'] == team]
+    return players[:12]
 
-def getPlayerRatings(player):
-    individualRatings = [ ]
-    overallRating = 0
-    firstName, lastName = filterName(player)
-    response = session.get(' https://nba-players.herokuapp.com/players-stats/' + str(lastName) + '/' + str(firstName))
-    responseString = response.text
-    responseDict = json.loads(responseString)
-    individualRatings += [65 + int(float(responseDict['points_per_game']))] #scoring Rating
-    individualRatings += [59 + 4*(int(float(responseDict['assists_per_game'])))]  #passing Rating
-    individualRatings += [50 + 12*(int(float(responseDict['three_point_made_per_game'])))] #threepoint Rating
-    individualRatings += [49 + 4*(int(float(responseDict['rebounds_per_game'])))] #rebounding Rating
-    individualRatings += [50 + 19*(int(float(responseDict['steals_per_game'])))]  #steal Rating
-    individualRatings += [50 + 22*(int(float(responseDict['blocks_per_game'])))] #block Rating
-    for i in range(len(individualRatings)):
-        if individualRatings[i] > 100:
-            individualRatings[i] = 100
-        overallRating += individualRatings[i]
-    overallRating //= 4.8
-    if overallRating >= 100:
-        return individualRatings, 99
+def getPlayerStats(player, team):
+    name = player.lower()
+    headers = {
+        "Ocp-Apim-Subscription-Key": API_KEY
+    }
+    response = session.get(f"https://api.sportsdata.io/v3/nba/stats/json/PlayerSeasonStatsByTeam/2023/{team}?key={API_KEY}", headers=headers)
+    responseJSON = response.json()
+    playerData = next((player for player in responseJSON if player['Name'].lower() == name), None)
+    if playerData:
+        return playerData
     else:
-        return individualRatings, overallRating
+        print(f"No stats found for player {player}")
+        return None
 
-def getPlayerPercentages(app, player):
+def getPlayerRatings(player, team):
+    individualRatings = []
+    overallRating = 0
+    statsDict = getPlayerStats(player, team)
+    if statsDict:
+        if statsDict['Games'] == 0:
+            return [60, 60, 60, 60, 60, 60], 60 # default
+        points_per_game = ((statsDict['TwoPointersMade'] * 2) + (statsDict['ThreePointersMade'] * 3) + (statsDict['FreeThrowsMade']))/statsDict['Games']
+        individualRatings += [60 + int(points_per_game)] #scoring Rating
+        individualRatings += [59 + 2.8*(int(float(statsDict['Assists']/statsDict['Games'])))]  #passing Rating
+        individualRatings += [50 + 10.5*(int(float(statsDict['ThreePointersMade']/statsDict['Games'])))] #threepoint Rating
+        individualRatings += [49 + 2.6*(int(float(statsDict['Rebounds']/statsDict['Games'])))] #rebounding Rating
+        individualRatings += [50 + 17*(int(float(statsDict['Steals']/statsDict['Games'])))]  #steal Rating
+        individualRatings += [50 + 8*(int(float(statsDict['BlocksPercentage'])))] #block Rating
+        for i in range(len(individualRatings)):
+            if individualRatings[i] > 100:
+                individualRatings[i] = 100
+            overallRating += individualRatings[i]
+        overallRating //= 5.1
+        if overallRating >= 100:
+            return individualRatings, 99
+        else:
+            return individualRatings, overallRating
+    else:
+        return [], 0
+
+def getPlayerPercentages(app, player, team):
     percentages = []
-    playerRatings = getPlayerRatings(player)[0]
+    playerRatings = getPlayerRatings(player, team)[0]
     percentages += [(playerRatings[0]/1.6)/100] #scoring percentage
     percentages += [(playerRatings[1]*1.22)/100] #pass completion percentage
     percentages += [(playerRatings[2]/2.2)/100] #three point percentage
@@ -175,12 +199,12 @@ def getPlayerPercentages(app, player):
             percentages[i] = 0.98
     return percentages
 
-def getBestFive(app, teamRoster): #####
+def getBestFive(app, teamRoster, team): #####
     bestFive = []
     bestFiveOveralls = []
     for i in range(len(teamRoster)):
         player = teamRoster[i]
-        overallRating = int(getPlayerRatings(player)[1])
+        overallRating = int(getPlayerRatings(player, team)[1])
         if len(bestFive) < 5:
             bestFive.append(player)
             bestFiveOveralls.append(overallRating)
@@ -207,11 +231,11 @@ def createStaminaDict(app, L):
 
 def createPlayerPercentagesDict(app, L):
     for i in range(len(L)):
-        app.playerPercentages[L[i]] = getPlayerPercentages(app, L[i])
+        app.playerPercentages[L[i]] = getPlayerPercentages(app, L[i], app.selectedTeamAcronym)
 
 def createOpponentPlayerPercentagesDict(app, L):
     for i in range(len(L)):
-        app.opponentPercentages[L[i]] = getPlayerPercentages(app, L[i])
+        app.opponentPercentages[L[i]] = getPlayerPercentages(app, L[i], app.opposingTeamAcronym)
 
 #code copied from https://www.geeksforgeeks.org/python-program-for-selection-sort/
 def selectionSort(A, B):
@@ -232,13 +256,22 @@ def arrangePlayerOveralls(app, L1, L2):
     return arrangedPlaying5, arrangedOpposing5
 
 def arrangeReboundOveralls(app, L1):
-    reboundRatings = []
-    for i in range(len(L1)):
-        playerRating = getPlayerPercentages(app, L1[i])
-        reboundRating = playerRating[3]
-        reboundRatings.append(reboundRating)
-    arrangedReboundRatings = selectionSort(reboundRatings, L1)
-    return arrangedReboundRatings
+    if L1 == app.opposing5:
+        reboundRatings = []
+        for i in range(len(L1)):
+            playerRating = getPlayerPercentages(app, L1[i], app.opposingTeamAcronym)
+            reboundRating = playerRating[3]
+            reboundRatings.append(reboundRating)
+        arrangedReboundRatings = selectionSort(reboundRatings, L1)
+        return arrangedReboundRatings
+    else:
+        reboundRatings = []
+        for i in range(len(L1)):
+            playerRating = getPlayerPercentages(app, L1[i], app.selectedTeamAcronym)
+            reboundRating = playerRating[3]
+            reboundRatings.append(reboundRating)
+        arrangedReboundRatings = selectionSort(reboundRatings, L1)
+        return arrangedReboundRatings
 
 def substituteOpposingPlayers(app, n): #sub opposing players based on their stamina
     j = random.randint(0,11)
@@ -280,7 +313,7 @@ def mousePressed(app, event):
                 app.teamRoster = getTeamPlayers(app.teamAcronyms[i])
                 app.selectedTeamAcronym = app.teamAcronyms[i]
                 app.selectedPlayerName = app.teamRoster[app.selectedPlayer]
-                app.playing5, app.playing5Overalls = getBestFive(app, app.teamRoster)
+                app.playing5, app.playing5Overalls = getBestFive(app, app.teamRoster, app.selectedTeamAcronym)
 
     #roster screen
     elif app.rosterScreen:
@@ -297,7 +330,7 @@ def mousePressed(app, event):
                 app.opposingTeam += 1
             app.opposingTeamAcronym = app.teamAcronyms[app.opposingTeam]
             app.opposingTeamPlayers = getTeamPlayers(app.opposingTeamAcronym)
-            app.opposing5, app.opposing5Overalls = getBestFive(app, app.opposingTeamPlayers)
+            app.opposing5, app.opposing5Overalls = getBestFive(app, app.opposingTeamPlayers, app.opposingTeamAcronym)
             app.userStats = createStatsDict(app, app.playing5)
             app.opponentStats = createStatsDict(app, app.opposing5)
             app.opposingTeamName = app.teams[app.opposingTeam]
@@ -307,7 +340,8 @@ def mousePressed(app, event):
             createOpponentPlayerPercentagesDict(app, app.opposingTeamPlayers)
         elif (clickedSelectButton(app, event.x, event.y) and 
             app.selectedPlayerName not in app.playing5):
-            overallRating = int(getPlayerRatings(app.selectedPlayerName)[1])
+            overallRating = int(getPlayerRatings(app.selectedPlayerName, app.selectedTeamAcronym)[1])
+            print(overallRating)
             if len(app.playing5) < 5:
                 app.playing5 += [app.selectedPlayerName]
                 app.playing5Overalls += [overallRating]
@@ -359,10 +393,10 @@ def mousePressed(app, event):
             app.started = not app.started
             if app.possession == 0:
                 app.playerWithBallName = app.playing5[app.playerWithBall]
-                app.playerWithBallPercentages = getPlayerPercentages(app, app.playerWithBallName)
+                app.playerWithBallPercentages = getPlayerPercentages(app, app.playerWithBallName, app.selectedTeamAcronym)
             elif app.possession == 1:
                 app.playerWithBallName = app.opposing5[app.playerWithBall]
-                app.playerWithBallPercentages = getPlayerPercentages(app, app.playerWithBallName)
+                app.playerWithBallPercentages = getPlayerPercentages(app, app.playerWithBallName, app.opposingTeamAcronym)
         elif clickedStartButton(app, event.x, event.y):
             app.paused = not app.paused
         if clickedSubButton(app, event.x, event.y):
@@ -387,7 +421,7 @@ def mousePressed(app, event):
             app.paused = not app.paused
         elif (clickedSelectButton(app, event.x, event.y) and 
             app.selectedPlayerName not in app.playing5):
-            overallRating = int(getPlayerRatings(app.selectedPlayerName)[1])
+            overallRating = int(getPlayerRatings(app.selectedPlayerName, app.selectedTeamAcronym)[1])
             if len(app.playing5) < 5:
                 app.playing5 += [app.selectedPlayerName]
                 app.playing5Overalls += [overallRating]
@@ -500,7 +534,7 @@ def timerFired(app):
                 if app.possession == 0:
                     randomDecimal2 = float(decimal.Decimal(random.randrange(000, 100))/100)
                     opponentPlayerName = app.opposing5[app.playerWithBall]
-                    opponentPercentages = getPlayerPercentages(app, opponentPlayerName)
+                    opponentPercentages = getPlayerPercentages(app, opponentPlayerName, app.opposingTeamAcronym)
                     if randomDecimal2 <= opponentPercentages[4]:
                         app.possession = 1 - app.possession
                         if opponentPlayerName in app.opponentStats:
@@ -510,7 +544,7 @@ def timerFired(app):
                 else:
                     randomDecimal3 = float(decimal.Decimal(random.randrange(000, 100))/100)
                     userPlayerName = app.playing5[app.playerWithBall]
-                    userPlayerPercentages = getPlayerPercentages(app, userPlayerName)
+                    userPlayerPercentages = getPlayerPercentages(app, userPlayerName, app.selectedTeamAcronym)
                     if randomDecimal3 <= userPlayerPercentages[4]:
                         app.possession = 1 - app.possession
                         if userPlayerName in app.userStats:
@@ -1444,7 +1478,7 @@ def drawPlayerNames(app, canvas):
     lineGap = rectHeight//12
     for j in range(len(app.teamRoster)):
         y1 = app.height*(1/6) + ((j+1)*lineGap) - app.width/46
-        overallRating = int(getPlayerRatings(app.teamRoster[j])[1])
+        overallRating = int(getPlayerRatings(app.teamRoster[j], app.selectedTeamAcronym)[1])
         if app.selectedPlayer == j:
             canvas.create_text(app.width/40, y1, 
                 text = app.teamRoster[j], font = 'Impact 15 bold', 
@@ -1482,17 +1516,27 @@ def filterName(player):
 def drawPlayerImage(app, canvas):
     name = app.teamRoster[app.selectedPlayer]
     firstName, lastName = filterName(name)
-    response = session.get('https://nba-players.herokuapp.com/players/' + str(lastName) + '/' + str(firstName), stream = True)
-    image = Image.open(response.raw)
-    image = image.resize((200,200))
-    canvas.create_image(app.width*(0.5), app.height*(0.25), anchor = 'n', 
-        image = ImageTk.PhotoImage(image))
+    player_api_url = f"https://www.balldontlie.io/api/v1/players?search={firstName}%20{lastName}"
+    player_data = requests.get(player_api_url).json()
+    
+    if player_data['meta']['total_count'] > 0:
+        player_id = player_data['data'][0]['id']
+        player_image_url = f"https://ak-static.cms.nba.com/wp-content/uploads/headshots/nba/latest/260x190/{player_id}.png"
+        response = session.get(player_image_url, stream=True)
+        if response.status_code == 200:
+            image = Image.open(response.raw)
+            image = image.resize((200, 200))
+            canvas.create_image(app.width * 0.5, app.height * 0.25, anchor='n', image=ImageTk.PhotoImage(image))
+        else:
+            print(f"Could not fetch image for player {name}")
+    else:
+        print(f"Player {name} not found")
 
 def drawPlayerInfo(app, canvas):
     pass
 
 def drawPlayerRatings(app, canvas):
-    playerRatings, playerOverall = getPlayerRatings(app.selectedPlayerName)
+    playerRatings, playerOverall = getPlayerRatings(app.selectedPlayerName, app.selectedTeamAcronym)
     canvas.create_text(app.width*(0.5), app.height*(0.59), 
         text = f'{int(playerOverall)}', font = 'impact 80 bold', 
         fill = 'orange')
@@ -1560,11 +1604,11 @@ def drawRosterScreenFrameWork(app, canvas):
         fill = 'orange')
     canvas.create_rectangle(app.width*(0.5)-100, app.height*(0.385)-100, 
         app.width*(0.5) + 100, app.height*(0.385) + 100, outline = 'black', width = 2)
-    if name not in noImageList:
-        drawPlayerImage(app, canvas)
-    else:
-        canvas.create_text(app.width*0.5, app.height*0.385, text = 'NO IMAGE',
-            font = 'Impact 30 bold', fill = 'black')
+    # if name not in noImageList:
+        # drawPlayerImage(app, canvas)
+    # else:
+    canvas.create_text(app.width*0.5, app.height*0.385, text = 'NO IMAGE',
+        font = 'Impact 30 bold', fill = 'black')
 
 def rosterScreen_RedrawAll(app, canvas):
     drawRosterScreenFrameWork(app, canvas)
@@ -2073,7 +2117,7 @@ def drawOpponentNames(app, canvas):
     lineGap = rectHeight//12
     for j in range(len(app.teamRoster)):
         y1 = app.height*(1/6) + ((j+1)*lineGap) - app.width/46
-        overallRating = int(getPlayerRatings(app.opposingTeamPlayers[j])[1])
+        overallRating = int(getPlayerRatings(app.opposingTeamPlayers[j], app.opposingTeam)[1])
         if app.selectedPlayer == j:
             canvas.create_text(app.width/40, y1, 
                 text = app.opposingTeamPlayers[j], font = 'Impact 15 bold', 
@@ -2100,6 +2144,7 @@ def opponentStatsScreen_RedrawAll(app, canvas):
     drawOpponentStats(app, canvas)
     drawBackButton(app, canvas)
 
+    
 runApp(width=1300, height=750)
 
 
