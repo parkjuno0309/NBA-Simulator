@@ -2,6 +2,7 @@ from cmu_112_graphics import *
 import math, time, requests, json, requests_cache, string, random, decimal
 from PIL import ImageTk, Image
 from io import BytesIO
+from bs4 import BeautifulSoup
 
 
 requests_cache.install_cache('nba_cache')
@@ -32,6 +33,27 @@ def getTeamAcronyms():
     sortedAcronyms[1], sortedAcronyms[2] = sortedAcronyms[2], sortedAcronyms[1]
     return sortedAcronyms
 
+def getPlayerSearchAcronyms():
+    teamAcronyms = []
+    newAcronyms = []
+    response = session.get('https://www.balldontlie.io/api/v1/teams')
+    responseJSON = response.json()
+    for team in responseJSON['data']:
+        teamAcronyms.append(team['abbreviation'])
+    sortedAcronyms = sorted(teamAcronyms)
+    sortedAcronyms[1], sortedAcronyms[2] = sortedAcronyms[2], sortedAcronyms[1]
+    for team in sortedAcronyms:
+        if team == 'GSW':
+            newAcronyms.append('GS')
+        elif team == 'NYK':
+            newAcronyms.append('NY')
+        elif team == 'NOP':
+            newAcronyms.append('NO')
+        elif team == 'SAS':
+            newAcronyms.append('SA')
+        else:
+            newAcronyms.append(team)
+    return newAcronyms
 
 def filterName(nameString):
     # Split the name string into first and last name
@@ -83,6 +105,7 @@ def resetApp(app):
     app.posessionSwitchTime = 0
     app.teams = getTeams()
     app.teamAcronyms = getTeamAcronyms()
+    app.playerSearchAcronyms = getPlayerSearchAcronyms()
     app.teamRoster = getTeamPlayers('ATL')
 
     #team mode app selects
@@ -135,6 +158,7 @@ def resetApp(app):
     app.passTendencyX = app.width*(0.6)
     app.threePointTendencyX = app.width*(0.6)
 
+
 #returns list of players on a specific team
 def getTeamPlayers(team):
     headers = {
@@ -161,23 +185,24 @@ def getPlayerStats(player, team):
 
 def getPlayerRatings(player, team):
     individualRatings = []
+    weights = [1, 0.9, 0.9, 0.9, 0.82, 0.82]
     overallRating = 0
     statsDict = getPlayerStats(player, team)
     if statsDict:
         if statsDict['Games'] == 0:
             return [60, 60, 60, 60, 60, 60], 60 # default
         points_per_game = ((statsDict['TwoPointersMade'] * 2) + (statsDict['ThreePointersMade'] * 3) + (statsDict['FreeThrowsMade']))/statsDict['Games']
-        individualRatings += [60 + int(points_per_game)] #scoring Rating
-        individualRatings += [59 + 2.8*(int(float(statsDict['Assists']/statsDict['Games'])))]  #passing Rating
-        individualRatings += [50 + 10.5*(int(float(statsDict['ThreePointersMade']/statsDict['Games'])))] #threepoint Rating
-        individualRatings += [49 + 2.6*(int(float(statsDict['Rebounds']/statsDict['Games'])))] #rebounding Rating
-        individualRatings += [50 + 17*(int(float(statsDict['Steals']/statsDict['Games'])))]  #steal Rating
-        individualRatings += [50 + 8*(int(float(statsDict['BlocksPercentage'])))] #block Rating
+        individualRatings += [int(60 + int(points_per_game))] #scoring Rating
+        individualRatings += [int(59 + 2.9*(int(float(statsDict['Assists']/statsDict['Games']))))]  #passing Rating
+        individualRatings += [int(50 + 11*(int(float(statsDict['ThreePointersMade']/statsDict['Games']))))] #threepoint Rating
+        individualRatings += [int(49 + 3.3*(int(float(statsDict['Rebounds']/statsDict['Games']))))] #rebounding Rating
+        individualRatings += [int(50 + 17*(int(float(statsDict['Steals']/statsDict['Games']))))]  #steal Rating
+        individualRatings += [int(50 + 8.5*(int(float(statsDict['BlocksPercentage']))))] #block Rating
         for i in range(len(individualRatings)):
-            if individualRatings[i] > 100:
-                individualRatings[i] = 100
-            overallRating += individualRatings[i]
-        overallRating //= 5.1
+            if individualRatings[i] >= 100:
+                individualRatings[i] = 99
+            overallRating += individualRatings[i] * weights[i]
+        overallRating //= 4.8
         if overallRating >= 100:
             return individualRatings, 99
         else:
@@ -291,8 +316,8 @@ def mousePressed(app, event):
     #home screen
     if app.homeScreen:
         if clickedHomeStartButton(app, event.x, event.y):
-                app.teamSelect = not app.teamSelect
-                app.homeScreen = not app.homeScreen
+            app.teamSelect = not app.teamSelect
+            app.homeScreen = not app.homeScreen
         if clickedHelpButton(app, event.x, event.y):
             app.homeScreen = not app.homeScreen
             app.helpScreen = not app.helpScreen
@@ -310,8 +335,8 @@ def mousePressed(app, event):
                 app.selected = getCell(app, event.x, event.y)
                 i = app.selected[0] + app.selected[1] + (5*app.selected[0])
                 app.selectedTeam = app.teams[i]
-                app.teamRoster = getTeamPlayers(app.teamAcronyms[i])
-                app.selectedTeamAcronym = app.teamAcronyms[i]
+                app.teamRoster = getTeamPlayers(app.playerSearchAcronyms[i])
+                app.selectedTeamAcronym = app.playerSearchAcronyms[i]
                 app.selectedPlayerName = app.teamRoster[app.selectedPlayer]
                 app.playing5, app.playing5Overalls = getBestFive(app, app.teamRoster, app.selectedTeamAcronym)
 
@@ -341,7 +366,6 @@ def mousePressed(app, event):
         elif (clickedSelectButton(app, event.x, event.y) and 
             app.selectedPlayerName not in app.playing5):
             overallRating = int(getPlayerRatings(app.selectedPlayerName, app.selectedTeamAcronym)[1])
-            print(overallRating)
             if len(app.playing5) < 5:
                 app.playing5 += [app.selectedPlayerName]
                 app.playing5Overalls += [overallRating]
@@ -1513,24 +1537,28 @@ def filterName(player):
         lastName = playerName[2] + '_' + playerName[3] + '_' + playerName[4]
     return firstName, lastName
 
+def filterName(name):
+    first_name, last_name = name.split(" ", 1)
+    return first_name, last_name
+
 def drawPlayerImage(app, canvas):
     name = app.teamRoster[app.selectedPlayer]
     firstName, lastName = filterName(name)
-    player_api_url = f"https://www.balldontlie.io/api/v1/players?search={firstName}%20{lastName}"
-    player_data = requests.get(player_api_url).json()
     
-    if player_data['meta']['total_count'] > 0:
-        player_id = player_data['data'][0]['id']
-        player_image_url = f"https://ak-static.cms.nba.com/wp-content/uploads/headshots/nba/latest/260x190/{player_id}.png"
-        response = session.get(player_image_url, stream=True)
-        if response.status_code == 200:
-            image = Image.open(response.raw)
-            image = image.resize((200, 200))
-            canvas.create_image(app.width * 0.5, app.height * 0.25, anchor='n', image=ImageTk.PhotoImage(image))
-        else:
-            print(f"Could not fetch image for player {name}")
+    # Replace spaces with dashes and make the name lowercase
+    formatted_name = f"{firstName}-{lastName}".replace(" ", "-").lower()
+    
+    player_image_url = f"https://ak-static.cms.nba.com/wp-content/uploads/headshots/nba/latest/260x190/{formatted_name}.png"
+    response = session.get(player_image_url, stream=True)
+    
+    if response.status_code == 200:
+        image = Image.open(response.raw)
+        image = image.resize((200, 200))
+        player_photo = ImageTk.PhotoImage(image)
+        canvas.create_image(app.width * 0.5, app.height * 0.25, anchor='n', image=player_photo)
+        canvas.player_photo = player_photo  # Store the reference to the image to prevent garbage collection
     else:
-        print(f"Player {name} not found")
+        print(f"Could not fetch image for player {name}")
 
 def drawPlayerInfo(app, canvas):
     pass
@@ -1604,9 +1632,9 @@ def drawRosterScreenFrameWork(app, canvas):
         fill = 'orange')
     canvas.create_rectangle(app.width*(0.5)-100, app.height*(0.385)-100, 
         app.width*(0.5) + 100, app.height*(0.385) + 100, outline = 'black', width = 2)
-    # if name not in noImageList:
-        # drawPlayerImage(app, canvas)
-    # else:
+    #if name not in noImageList:
+        #drawPlayerImage(app, canvas)
+    #else:
     canvas.create_text(app.width*0.5, app.height*0.385, text = 'NO IMAGE',
         font = 'Impact 30 bold', fill = 'black')
 
