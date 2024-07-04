@@ -26,4 +26,4 @@ Juno Park
 
 1. Clone this repository with `git clone https://github.com/parkjuno0309/NBA-Simulator.git`.
 2. Navigate to the project directory with `cd TP3`.
-3. Run `./TP3` to run the application.
+3. Run the TP3.py file to start the application.
